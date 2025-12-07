@@ -6,40 +6,57 @@ import { v4 as uuidv4 } from "uuid";
 
 export const dynamic = 'force-dynamic';
 
-async function generateImageWithGemini(prompt: string): Promise<{ url: string | null, error?: string }> {
+async function generateImageWithGemini(prompt: string, imageParts: any[] = []): Promise<{ url: string | null, error?: string }> {
     const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
     if (!apiKey) return { url: null, error: "No API Key" };
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent`;
 
     try {
+        const contents = [{
+            parts: [
+                { text: prompt },
+                ...imageParts
+            ]
+        }];
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 300000); // 300 seconds timeout
+
+        const requestBody = JSON.stringify({
+            contents,
+            tools: [{ googleSearch: {} }],
+            generationConfig: {
+                imageConfig: {
+                    aspectRatio: "1:1",
+                    imageSize: "2K"
+                }
+            }
+        });
+
+        console.log("Gemini API Request URL:", url);
+        console.log("Gemini API Request Body:", JSON.stringify(JSON.parse(requestBody), null, 2)); // Pretty print
+
         const response = await fetch(url, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
                 "x-goog-api-key": apiKey,
             },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [{ text: "Create an image of a webtoon scene described as follows. \n\nScene Description:\n" + prompt }]
-                }],
-                tools: [{ googleSearch: {} }],
-                generationConfig: {
-                    imageConfig: {
-                        aspectRatio: "1:1",
-                        imageSize: "2K"
-                    }
-                }
-            }),
-        });
+            body: requestBody,
+            signal: controller.signal
+        }).finally(() => clearTimeout(timeoutId));
+
+        console.log("Gemini API Response Status:", response.status, response.statusText);
 
         if (!response.ok) {
             const errorText = await response.text();
-            console.error("Gemini Image API Error:", response.status, errorText);
+            console.error("Gemini Image API Error Body:", errorText);
             return { url: null, error: `${response.status} ${response.statusText}: ${errorText}` };
         }
 
         const data = await response.json();
+        console.log("Gemini API Response Data:", JSON.stringify(data, null, 2));
 
         // Check for inlineData (base64)
         const part = data.candidates?.[0]?.content?.parts?.[0];
@@ -74,16 +91,59 @@ async function generateImageWithGemini(prompt: string): Promise<{ url: string | 
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const { scenario, characterId, model: selectedModel } = body;
+        const { scenario, characterIds, model: selectedModel } = body;
 
         let imageUrl = "";
         let debugError = "";
+        let finalPrompt = scenario;
+
+        let imageParts: any[] = [];
+
+        // 1. Fetch Character Info if selected
+        if (characterIds && Array.isArray(characterIds) && characterIds.length > 0) {
+            const characters = await prisma.character.findMany({
+                where: { id: { in: characterIds } },
+            });
+
+            if (characters.length > 0) {
+                const charDescriptions = characters.map(c => `Name: ${c.name}\nDescription: ${c.description}`).join("\n\n");
+                finalPrompt = `Characters involved:\n${charDescriptions}\n\nScene Description:\n${scenario}`;
+                console.log("Using Characters:", characters.map(c => c.name).join(", "));
+
+                // Prepare image parts for all characters
+                for (const character of characters) {
+                    if (character.imageUrl) {
+                        try {
+                            const filename = character.imageUrl.split('/').pop();
+                            if (filename) {
+                                const filePath = path.join(process.cwd(), "public", "uploads", filename);
+                                if (fs.existsSync(filePath)) {
+                                    const imageBuffer = fs.readFileSync(filePath);
+                                    const base64Image = imageBuffer.toString("base64");
+                                    imageParts.push({
+                                        inlineData: {
+                                            mimeType: "image/png",
+                                            data: base64Image
+                                        }
+                                    });
+                                }
+                            }
+                        } catch (e) {
+                            console.error("Failed to load character image for", character.name, e);
+                        }
+                    }
+                }
+                if (imageParts.length > 0) {
+                    console.log(`Added ${imageParts.length} character reference images`);
+                }
+            }
+        }
 
         // Direct Image Generation (Gemini 3 Pro Image or Mock)
         // User requested to skip text refinement and use scenario directly
         if (selectedModel === "nano-banana" || process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
             // Try Gemini Image first if key exists
-            const { url, error } = await generateImageWithGemini(scenario);
+            const { url, error } = await generateImageWithGemini(finalPrompt, imageParts);
             if (url) {
                 imageUrl = url;
             } else {
@@ -100,10 +160,12 @@ export async function POST(request: Request) {
         }
 
         // 3. Save to DB
+        const primaryCharacterId = (characterIds && characterIds.length > 0) ? characterIds[0] : undefined;
+
         const savedScenario = await prisma.scenario.create({
             data: {
                 content: scenario,
-                characterId: characterId || undefined,
+                characterId: primaryCharacterId,
             },
         });
 
@@ -117,7 +179,7 @@ export async function POST(request: Request) {
         return NextResponse.json({
             success: true,
             imageUrl,
-            refinedPrompt: scenario, // Just return original scenario as refined prompt
+            refinedPrompt: finalPrompt,
             debugError
         });
 

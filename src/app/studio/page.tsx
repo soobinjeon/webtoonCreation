@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Image from "next/image";
-import { Wand2, Loader2, History, Layout, Sparkles, RefreshCw, Image as ImageIcon } from "lucide-react";
+import { Wand2, Loader2, History, Layout, Sparkles, RefreshCw, Image as ImageIcon, User } from "lucide-react";
 
 interface Generation {
     id: string;
@@ -12,15 +12,24 @@ interface Generation {
     };
 }
 
+interface Character {
+    id: string;
+    name: string;
+    imageUrl: string | null;
+}
+
 export default function StudioPage() {
     const [scenario, setScenario] = useState("");
     const [isGenerating, setIsGenerating] = useState(false);
     const [resultImage, setResultImage] = useState<string | null>(null);
     const [history, setHistory] = useState<Generation[]>([]);
     const [selectedModel, setSelectedModel] = useState("default");
+    const [characters, setCharacters] = useState<Character[]>([]);
+    const [selectedCharacterIds, setSelectedCharacterIds] = useState<string[]>([]);
 
     useEffect(() => {
         fetchHistory();
+        fetchCharacters();
     }, []);
 
     const fetchHistory = async () => {
@@ -35,6 +44,26 @@ export default function StudioPage() {
         }
     };
 
+    const fetchCharacters = async () => {
+        try {
+            const res = await fetch("/api/characters");
+            const data = await res.json();
+            if (Array.isArray(data)) {
+                setCharacters(data);
+            }
+        } catch (error) {
+            console.error("Failed to fetch characters", error);
+        }
+    };
+
+    const toggleCharacter = (id: string) => {
+        setSelectedCharacterIds(prev =>
+            prev.includes(id)
+                ? prev.filter(c => c !== id)
+                : [...prev, id]
+        );
+    };
+
     const handleGenerate = async () => {
         if (!scenario) return;
         setIsGenerating(true);
@@ -46,7 +75,8 @@ export default function StudioPage() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     scenario,
-                    model: selectedModel
+                    model: selectedModel,
+                    characterIds: selectedCharacterIds
                 }),
             });
             const data = await res.json();
@@ -81,6 +111,43 @@ export default function StudioPage() {
                             <option value="default">Standard Webtoon (Fast)</option>
                             <option value="nano-banana">Nano Banana Pro (High Quality)</option>
                         </select>
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-sm text-muted-foreground font-medium">Characters (Select Multiple)</label>
+                        <div className="grid grid-cols-4 gap-2">
+                            {characters.map((char) => {
+                                const isSelected = selectedCharacterIds.includes(char.id);
+                                return (
+                                    <button
+                                        key={char.id}
+                                        onClick={() => toggleCharacter(char.id)}
+                                        className={`relative aspect-square rounded-lg overflow-hidden border-2 transition-all ${isSelected ? "border-primary ring-2 ring-primary/50" : "border-white/10 hover:border-white/30"
+                                            }`}
+                                        title={char.name}
+                                    >
+                                        {char.imageUrl ? (
+                                            <Image src={char.imageUrl} alt={char.name} fill className="object-cover" />
+                                        ) : (
+                                            <div className="w-full h-full bg-secondary flex items-center justify-center">
+                                                <User className="w-6 h-6 text-muted-foreground" />
+                                            </div>
+                                        )}
+                                        {isSelected && (
+                                            <div className="absolute inset-0 bg-primary/20 flex items-center justify-center">
+                                                <div className="w-2 h-2 bg-primary rounded-full shadow-[0_0_10px_theme(colors.primary.DEFAULT)]" />
+                                            </div>
+                                        )}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        {selectedCharacterIds.length === 0 && (
+                            <p className="text-xs text-muted-foreground">No characters selected.</p>
+                        )}
+                        {selectedCharacterIds.length > 0 && (
+                            <p className="text-xs text-primary">{selectedCharacterIds.length} character(s) selected.</p>
+                        )}
                     </div>
 
                     <textarea

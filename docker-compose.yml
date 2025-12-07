@@ -1,0 +1,16 @@
+version: '3'
+
+services:
+  webtoon-app:
+    container_name: webtoon-app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./public/uploads:/app/public/uploads
+      - ./prisma:/app/prisma
+    env_file:
+      - .env
+    restart: always

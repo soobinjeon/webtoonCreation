@@ -53,6 +53,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh ./
+RUN apk add --no-cache dos2unix && dos2unix docker-entrypoint.sh
 RUN chmod +x docker-entrypoint.sh
 
 USER nextjs
